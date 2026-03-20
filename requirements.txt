@@ -4,7 +4,8 @@ flask-cors>=4.0.0
 
 # Audio/Video Processing
 demucs>=4.0.0
-resemble-enhance>=0.0.1
+audio-denoiser>=0.1.2
+noisereduce>=3.0.0
 torch>=2.0.0
 torchaudio>=2.0.0
 ffmpeg-python>=0.2.0

@@ -1,18 +1,26 @@
-"""Audio/Video processing pipeline: Demucs → Denoiser → Resemble Enhance."""
+"""Audio/Video processing pipeline: Demucs → Denoiser (audio-denoiser) → Polish (noisereduce)."""
 import os
 import subprocess
 import uuid
 from pathlib import Path
 
+import soundfile as sf
 import torch
 import torchaudio
 
-# Resemble Enhance imports (optional - may fail if not installed)
+# Denoiser: audio-denoiser (ML-based, kompatibel dengan library terbaru)
 try:
-    from resemble_enhance.enhancer.inference import denoise, enhance
-    RESEMBLE_AVAILABLE = True
+    from audio_denoiser.AudioDenoiser import AudioDenoiser
+    AUDIO_DENOISER_AVAILABLE = True
 except ImportError:
-    RESEMBLE_AVAILABLE = False
+    AUDIO_DENOISER_AVAILABLE = False
+
+# Polish: noisereduce (spectral gating, ringan)
+try:
+    import noisereduce as nr
+    NOISEREDUCE_AVAILABLE = True
+except ImportError:
+    NOISEREDUCE_AVAILABLE = False
 
 
 def get_device():
@@ -27,12 +35,11 @@ def run_demucs(input_path: str, output_dir: str, log_callback=None) -> str:
     """
     def log(msg):
         if log_callback:
-            log_callback(f"[Demucs] {msg}")
+            log_callback(msg)
 
-    log("Memulai source separation (ekstraksi vokal)...")
-    log(f"Input: {input_path}")
+    log("[Demucs] Memulai source separation (ekstraksi vokal)...")
+    log(f"[Demucs] Input: {input_path}")
 
-    # Demucs output: separated/htdemucs_ft/{filename}/vocals.wav
     base_name = Path(input_path).stem
     demucs_out = os.path.join(output_dir, "demucs_output")
 
@@ -53,7 +60,7 @@ def run_demucs(input_path: str, output_dir: str, log_callback=None) -> str:
             bufsize=1,
         )
         for line in proc.stdout:
-            log(line.strip())
+            log(f"[Demucs] {line.strip()}")
         proc.wait()
         if proc.returncode != 0:
             raise RuntimeError(f"Demucs exited with code {proc.returncode}")
@@ -62,67 +69,75 @@ def run_demucs(input_path: str, output_dir: str, log_callback=None) -> str:
         if not os.path.exists(vocals_path):
             raise FileNotFoundError(f"File vokal tidak ditemukan: {vocals_path}")
 
-        log(f"Vokal berhasil diekstrak: {vocals_path}")
+        log(f"[Demucs] Vokal berhasil diekstrak: {vocals_path}")
         return vocals_path
 
-    except FileNotFoundError as e:
-        log(f"ERROR: Demucs tidak ditemukan. Pastikan demucs terinstall: pip install demucs")
+    except FileNotFoundError:
+        log("[Demucs] ERROR: Demucs tidak ditemukan. Pastikan demucs terinstall: pip install demucs")
         raise
     except Exception as e:
-        log(f"ERROR: {str(e)}")
+        log(f"[Demucs] ERROR: {str(e)}")
         raise
 
 
-def run_denoiser_and_enhance(input_path: str, output_path: str, log_callback=None) -> str:
+def run_denoiser_and_polish(input_path: str, output_path: str, log_callback=None) -> str:
     """
-    Run Resemble Enhance: Denoiser (HEAVY, conservative) → Enhance (REFINE/polish).
-    HEAVY denoising = full denoise pass.
-    Conservative = lambd 0.4 for enhance to avoid over-processing.
+    Denoiser (HEAVY, konservatif) → Polish (refine).
+    Menggunakan audio-denoiser untuk denoising + noisereduce untuk polish ringan.
     """
     def log(msg):
         if log_callback:
-            log_callback(f"[Resemble Enhance] {msg}")
+            log_callback(msg)
 
-    if not RESEMBLE_AVAILABLE:
-        raise ImportError("resemble-enhance tidak terinstall. Jalankan: pip install resemble-enhance")
+    if not AUDIO_DENOISER_AVAILABLE:
+        raise ImportError(
+            "audio-denoiser tidak terinstall. Jalankan: pip install audio-denoiser"
+        )
 
-    log("Memulai denoising (HEAVY, konservatif)...")
+    log("[Denoiser] Memulai denoising (HEAVY, konservatif)...")
     device = get_device()
-    log(f"Device: {device}")
+    log(f"[Denoiser] Device: {device}")
 
     try:
+        # Load audio
         wav, sr = torchaudio.load(input_path)
         wav = wav.mean(dim=0)  # Mono
+        if wav.dim() == 1:
+            wav = wav.unsqueeze(0)
 
-        # Step 1: Denoise (HEAVY - full denoise)
-        log("Menjalankan denoiser...")
-        wav_denoised, new_sr = denoise(wav, sr, device)
-        log("Denoising selesai.")
+        # Step 1: audio-denoiser (HEAVY denoising)
+        log("[Denoiser] Menjalankan audio-denoiser...")
+        denoiser = AudioDenoiser(device=torch.device(device))
+        wav_denoised = denoiser.process_waveform(wav, sr, auto_scale=True)
+        log("[Denoiser] Denoising selesai.")
 
-        # Step 2: Enhance (REFINE/polish - conservative lambd=0.4)
-        log("Memulai enhancement (polish)...")
-        wav_enhanced, new_sr = enhance(
-            wav_denoised,
-            new_sr,
-            device,
-            nfe=64,
-            solver="midpoint",
-            lambd=0.4,  # Conservative - avoid over-processing
-            tau=0.5,
-        )
-        log("Enhancement selesai.")
+        # Convert to numpy for noisereduce
+        wav_np = wav_denoised.squeeze().cpu().numpy()
+        if wav_np.ndim > 1:
+            wav_np = wav_np.mean(axis=0)
+
+        # Step 2: noisereduce (polish/refine ringan - konservatif)
+        if NOISEREDUCE_AVAILABLE:
+            log("[Polish] Memulai polish (refine)...")
+            wav_polished = nr.reduce_noise(
+                y=wav_np,
+                sr=sr,
+                stationary=True,
+                prop_decrease=0.5,  # Konservatif - tidak over-process
+            )
+            log("[Polish] Polish selesai.")
+        else:
+            wav_polished = wav_np
+            log("[Denoiser] noisereduce tidak tersedia, skip polish.")
 
         # Save output
-        wav_np = wav_enhanced.cpu().numpy()
-        import numpy as np
-        import soundfile as sf
-        sf.write(output_path, wav_np, new_sr)
-        log(f"Output disimpan: {output_path}")
+        sf.write(output_path, wav_polished, sr)
+        log(f"[Denoiser] Output disimpan: {output_path}")
 
         return output_path
 
     except Exception as e:
-        log(f"ERROR: {str(e)}")
+        log(f"[Denoiser] ERROR: {str(e)}")
         raise
 
 
@@ -130,20 +145,20 @@ def extract_audio_from_video(video_path: str, output_path: str, log_callback=Non
     """Extract audio from video using ffmpeg."""
     def log(msg):
         if log_callback:
-            log_callback(f"[FFmpeg Extract] {msg}")
+            log_callback(msg)
 
-    log("Mengekstrak audio dari video...")
+    log("[FFmpeg] Mengekstrak audio dari video...")
     import ffmpeg
 
     try:
         stream = ffmpeg.input(video_path)
         stream = ffmpeg.output(stream.audio, output_path, acodec="pcm_s16le", ac=1, ar=44100)
         ffmpeg.run(stream, overwrite_output=True, capture_stderr=True)
-        log(f"Audio diekstrak: {output_path}")
+        log(f"[FFmpeg] Audio diekstrak: {output_path}")
         return output_path
     except ffmpeg.Error as e:
         err = e.stderr.decode() if e.stderr else str(e)
-        log(f"ERROR: {err}")
+        log(f"[FFmpeg] ERROR: {err}")
         raise RuntimeError(f"FFmpeg extract gagal: {err}")
 
 
@@ -151,9 +166,9 @@ def merge_audio_video(video_path: str, audio_path: str, output_path: str, log_ca
     """Merge enhanced audio back with original video."""
     def log(msg):
         if log_callback:
-            log_callback(f"[FFmpeg Merge] {msg}")
+            log_callback(msg)
 
-    log("Menggabungkan audio dengan video...")
+    log("[FFmpeg] Menggabungkan audio dengan video...")
     import ffmpeg
 
     try:
@@ -167,55 +182,49 @@ def merge_audio_video(video_path: str, audio_path: str, output_path: str, log_ca
             acodec="aac",
         )
         ffmpeg.run(out, overwrite_output=True, capture_stderr=True)
-        log(f"Video output: {output_path}")
+        log(f"[FFmpeg] Video output: {output_path}")
         return output_path
     except ffmpeg.Error as e:
         err = e.stderr.decode() if e.stderr else str(e)
-        log(f"ERROR: {err}")
+        log(f"[FFmpeg] ERROR: {err}")
         raise RuntimeError(f"FFmpeg merge gagal: {err}")
 
 
 def process_audio(input_path: str, output_dir: str, log_callback=None) -> str:
     """
-    Full audio pipeline: Demucs → Denoiser → Resemble Enhance.
+    Full audio pipeline: Demucs → Denoiser → Polish.
     Returns path to output file.
     """
     task_id = str(uuid.uuid4())[:8]
     work_dir = os.path.join(output_dir, f"task_{task_id}")
     os.makedirs(work_dir, exist_ok=True)
 
-    # Step 1: Demucs
     vocals_path = run_demucs(input_path, work_dir, log_callback)
 
-    # Step 2 & 3: Denoiser + Enhance
     base_name = Path(input_path).stem
     output_path = os.path.join(output_dir, f"{base_name}_enhanced.wav")
-    run_denoiser_and_enhance(vocals_path, output_path, log_callback)
+    run_denoiser_and_polish(vocals_path, output_path, log_callback)
 
     return output_path
 
 
 def process_video(input_path: str, output_dir: str, log_callback=None) -> str:
     """
-    Full video pipeline: Extract → Demucs → Denoiser → Enhance → Merge.
+    Full video pipeline: Extract → Demucs → Denoiser → Polish → Merge.
     Returns path to output video file.
     """
     task_id = str(uuid.uuid4())[:8]
     work_dir = os.path.join(output_dir, f"task_{task_id}")
     os.makedirs(work_dir, exist_ok=True)
 
-    # Step 1: Extract audio
     extracted_audio = os.path.join(work_dir, "extracted_audio.wav")
     extract_audio_from_video(input_path, extracted_audio, log_callback)
 
-    # Step 2: Demucs
     vocals_path = run_demucs(extracted_audio, work_dir, log_callback)
 
-    # Step 3 & 4: Denoiser + Enhance
     enhanced_audio = os.path.join(work_dir, "enhanced_audio.wav")
-    run_denoiser_and_enhance(vocals_path, enhanced_audio, log_callback)
+    run_denoiser_and_polish(vocals_path, enhanced_audio, log_callback)
 
-    # Step 5: Merge
     base_name = Path(input_path).stem
     ext = Path(input_path).suffix
     output_path = os.path.join(output_dir, f"{base_name}_enhanced{ext}")

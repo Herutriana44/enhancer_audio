@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Audio Enhancer - Demucs → Denoiser → Resemble Enhance</title>
+    <title>Audio Enhancer - Demucs → Denoiser → Polish</title>
     <style>
         :root {
             --bg: #0f0f12;
@@ -13,6 +13,7 @@
             --accent-hover: #818cf8;
             --success: #22c55e;
             --error: #ef4444;
+            --warning: #f59e0b;
             --text: #e4e4e7;
             --text-muted: #71717a;
         }
@@ -24,25 +25,15 @@
             min-height: 100vh;
             padding: 2rem;
         }
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-        }
+        .container { max-width: 900px; margin: 0 auto; }
         header {
             margin-bottom: 2rem;
             border-bottom: 1px solid var(--surface-hover);
             padding-bottom: 1rem;
         }
-        h1 {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: var(--accent);
-        }
-        .version {
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            margin-top: 0.25rem;
-        }
+        h1 { font-size: 1.5rem; font-weight: 600; color: var(--accent); }
+        .version { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
+
         .upload-zone {
             border: 2px dashed var(--surface-hover);
             border-radius: 12px;
@@ -51,18 +42,53 @@
             background: var(--surface);
             transition: all 0.2s;
             cursor: pointer;
-            margin-bottom: 1.5rem;
+            margin-bottom: 1rem;
         }
         .upload-zone:hover, .upload-zone.dragover {
             border-color: var(--accent);
             background: var(--surface-hover);
         }
+        .upload-zone.has-file { border-color: var(--success); background: rgba(34, 197, 94, 0.1); }
         .upload-zone input { display: none; }
-        .upload-zone p {
-            color: var(--text-muted);
-            font-size: 0.9rem;
-            margin-top: 0.5rem;
+        .upload-zone p { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.5rem; }
+
+        .file-info {
+            display: none;
+            padding: 1rem 1.25rem;
+            background: var(--surface);
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            border-left: 4px solid var(--success);
         }
+        .file-info.visible { display: block; }
+        .file-info .name { font-weight: 600; color: var(--success); }
+        .file-info .meta { font-size: 0.8rem; color: var(--text-muted); margin-top: 0.25rem; }
+        .file-info .remove { margin-top: 0.5rem; font-size: 0.8rem; color: var(--error); cursor: pointer; text-decoration: underline; }
+
+        .status-bar {
+            display: none;
+            padding: 1rem;
+            background: var(--surface);
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .status-bar.visible { display: flex; }
+        .status-bar .spinner {
+            width: 24px; height: 24px;
+            border: 2px solid var(--surface-hover);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .status-bar .text { flex: 1; }
+        .status-bar.uploading { border-left: 4px solid var(--accent); }
+        .status-bar.processing { border-left: 4px solid var(--warning); }
+        .status-bar.success { border-left: 4px solid var(--success); }
+        .status-bar.error { border-left: 4px solid var(--error); }
+
         .btn {
             background: var(--accent);
             color: white;
@@ -75,19 +101,10 @@
             transition: background 0.2s;
         }
         .btn:hover { background: var(--accent-hover); }
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-        .log-section {
-            margin-top: 2rem;
-        }
-        .log-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 0.75rem;
-        }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .log-section { margin-top: 2rem; }
+        .log-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; }
         .log-header h2 { font-size: 1rem; }
         .log-box {
             background: #0a0a0c;
@@ -99,14 +116,8 @@
             font-size: 0.8rem;
             line-height: 1.6;
         }
-        .log-line {
-            font-family: inherit;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-        .log-line .time { color: var(--text-muted); margin-right: 0.5rem; }
+        .log-line { font-family: inherit; white-space: pre-wrap; word-break: break-all; }
         .log-line.error { color: var(--error); }
-        .log-line .tag { color: var(--accent); }
         .result {
             margin-top: 1rem;
             padding: 1rem;
@@ -116,19 +127,15 @@
         }
         .result.success { display: block; border-left: 4px solid var(--success); }
         .result.error { display: block; border-left: 4px solid var(--error); }
-        .result a {
-            color: var(--accent);
-            text-decoration: none;
-        }
+        .result a { color: var(--accent); text-decoration: none; }
         .result a:hover { text-decoration: underline; }
-        .loading { opacity: 0.7; pointer-events: none; }
     </style>
 </head>
 <body>
     <div class="container">
         <header>
             <h1>Audio Enhancer</h1>
-            <p class="version">v{{ version }} | Demucs → Denoiser (HEAVY) → Resemble Enhance</p>
+            <p class="version">v{{ version }} | Demucs → Denoiser (audio-denoiser) → Polish (noisereduce)</p>
         </header>
 
         <div class="upload-zone" id="uploadZone">
@@ -136,6 +143,17 @@
             <p><strong>Klik atau drag file</strong> untuk upload</p>
             <p>Audio: MP3, WAV, FLAC, M4A, OGG, AAC, WMA</p>
             <p>Video: MP4, AVI, MKV, MOV, WEBM, FLV, WMV</p>
+        </div>
+
+        <div class="file-info" id="fileInfo">
+            <div class="name" id="fileName"></div>
+            <div class="meta" id="fileMeta"></div>
+            <div class="remove" id="removeFile">Hapus file</div>
+        </div>
+
+        <div class="status-bar" id="statusBar">
+            <div class="spinner" id="statusSpinner"></div>
+            <div class="text" id="statusText"></div>
         </div>
 
         <button class="btn" id="processBtn" disabled>Proses</button>
@@ -156,12 +174,37 @@
     <script>
         const uploadZone = document.getElementById('uploadZone');
         const fileInput = document.getElementById('fileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const fileMeta = document.getElementById('fileMeta');
+        const removeFile = document.getElementById('removeFile');
+        const statusBar = document.getElementById('statusBar');
+        const statusSpinner = document.getElementById('statusSpinner');
+        const statusText = document.getElementById('statusText');
         const processBtn = document.getElementById('processBtn');
         const logBox = document.getElementById('logBox');
         const result = document.getElementById('result');
         const versionInfo = document.getElementById('versionInfo');
 
         let selectedFile = null;
+
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function showStatus(text, state) {
+            statusBar.classList.add('visible');
+            statusBar.classList.remove('uploading', 'processing', 'success', 'error');
+            if (state) statusBar.classList.add(state);
+            statusText.textContent = text;
+            statusSpinner.style.display = (state === 'uploading' || state === 'processing') ? 'block' : 'none';
+        }
+
+        function hideStatus() {
+            statusBar.classList.remove('visible');
+        }
 
         function loadVersion() {
             fetch('/api/version')
@@ -214,9 +257,27 @@
 
         fileInput.onchange = onFileSelect;
 
+        removeFile.onclick = (e) => {
+            e.stopPropagation();
+            selectedFile = null;
+            fileInput.value = '';
+            fileInfo.classList.remove('visible');
+            uploadZone.classList.remove('has-file');
+            processBtn.disabled = true;
+            hideStatus();
+        };
+
         function onFileSelect() {
             selectedFile = fileInput.files[0];
-            processBtn.disabled = !selectedFile;
+            if (!selectedFile) return;
+
+            fileInfo.classList.add('visible');
+            uploadZone.classList.add('has-file');
+            fileName.textContent = '✓ ' + selectedFile.name;
+            const isVideo = /\.(mp4|avi|mkv|mov|webm|flv|wmv)$/i.test(selectedFile.name);
+            fileMeta.textContent = formatSize(selectedFile.size) + ' • ' + (isVideo ? 'Video' : 'Audio');
+            processBtn.disabled = false;
+            hideStatus();
         }
 
         processBtn.onclick = async () => {
@@ -224,31 +285,57 @@
 
             processBtn.disabled = true;
             result.className = 'result';
-            result.innerHTML = '<span style="color: var(--accent);">⏳ Memproses... (dapat memakan waktu beberapa menit)</span>';
+            result.innerHTML = '';
             clearLogs();
             loadVersion();
 
             const formData = new FormData();
             formData.append('file', selectedFile);
 
-            addLog('--', 'Mengirim file...');
-            try {
-                const res = await fetch('/api/process', {
-                    method: 'POST',
-                    body: formData,
-                });
-                const data = await res.json();
+            showStatus('Mengirim file...', 'uploading');
+            addLog('--', 'Mengirim file: ' + selectedFile.name);
 
+            try {
+                const xhr = new XMLHttpRequest();
+
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) {
+                        const pct = Math.round((e.loaded / e.total) * 100);
+                        showStatus(`Upload: ${pct}%`, 'uploading');
+                    }
+                };
+
+                xhr.upload.onload = () => {
+                    showStatus('Upload berhasil ✓ Memproses... (dapat memakan waktu beberapa menit)', 'processing');
+                    addLog('--', 'Upload berhasil ✓');
+                    addLog('--', 'Server memproses: Demucs → Denoiser → Polish...');
+                };
+
+                const res = await new Promise((resolve, reject) => {
+                    xhr.onload = () => resolve(xhr);
+                    xhr.onerror = () => reject(new Error('Upload gagal'));
+                    xhr.open('POST', '/api/process');
+                    xhr.send(formData);
+                });
+
+                if (res.status !== 200 && res.status !== 500) {
+                    throw new Error('Upload gagal: ' + res.status);
+                }
+
+                const data = JSON.parse(res.responseText);
                 data.logs.forEach(l => addLog(l.time, l.msg, l.msg.includes('ERROR')));
 
                 if (data.success) {
+                    showStatus('Selesai!', 'success');
                     result.className = 'result success';
                     result.innerHTML = `✓ Selesai! <a href="/api/download/${data.output_file}" download>Download ${data.output_file}</a>`;
                 } else {
+                    showStatus('Error: ' + data.error, 'error');
                     result.className = 'result error';
                     result.innerHTML = `✗ Error: ${data.error}`;
                 }
             } catch (err) {
+                showStatus('Gagal: ' + err.message, 'error');
                 addLog('--', 'ERROR: ' + err.message, true);
                 result.className = 'result error';
                 result.innerHTML = '✗ Gagal: ' + err.message;

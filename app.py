@@ -43,10 +43,15 @@ def get_version_info():
     except ImportError:
         info.append("Demucs: not installed")
     try:
-        import resemble_enhance
-        info.append(f"Resemble Enhance: installed")
+        import audio_denoiser
+        info.append("audio-denoiser: installed")
     except ImportError:
-        info.append("Resemble Enhance: not installed")
+        info.append("audio-denoiser: not installed")
+    try:
+        import noisereduce
+        info.append("noisereduce: installed")
+    except ImportError:
+        info.append("noisereduce: not installed")
     return "\n".join(info)
 
 

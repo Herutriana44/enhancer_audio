@@ -1,17 +1,17 @@
 # Audio Enhancer
 
-Aplikasi Flask untuk memperbaiki kualitas audio dengan pipeline: **Demucs → Denoiser (HEAVY) → Resemble Enhance**.
+Aplikasi Flask untuk memperbaiki kualitas audio dengan pipeline: **Demucs → Denoiser (audio-denoiser) → Polish (noisereduce)**.
 
 ## Flow
 
 ### Audio Input
 ```
-Audio (MP3, WAV, dll) → Demucs (source separation/vokal) → Denoiser (HEAVY, konservatif) → Resemble Enhance (REFINE/polish) → Output
+Audio (MP3, WAV, dll) → Demucs (source separation/vokal) → Denoiser (HEAVY, konservatif) → Polish (refine) → Output
 ```
 
 ### Video Input
 ```
-Video → Extract audio → Demucs → Denoiser → Resemble Enhance → Merge video
+Video → Extract audio → Demucs → Denoiser → Polish → Merge video
 ```
 
 ## Instalasi
@@ -53,5 +53,6 @@ Gunakan notebook `run_colab_kaggle.ipynb`:
 ## Dependencies
 
 - **Demucs**: Source separation, ekstraksi vokal
-- **Resemble Enhance**: Denoising (HEAVY) + Enhancement (konservatif)
+- **audio-denoiser**: Denoising (HEAVY, ML-based)
+- **noisereduce**: Polish/refine (spectral gating, konservatif)
 - **FFmpeg**: Ekstraksi audio dari video, merge video
